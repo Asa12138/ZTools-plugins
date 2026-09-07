@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-09-07
+
+### Fixed
+- **优化隐阅窗口拖拽和拉伸逻辑%**：优化隐阅窗口拖拽和拉伸逻辑，减少粘滞感
+
+
 ## [1.4.1](https://github.com/me1dlinger/hushreader/releases/tag/v1.4.1) - 2026-09-01
 
 ### Added
