@@ -8,6 +8,15 @@ const HOLIDAY_KEY = 'easyremind_holidays'
 const HOLIDAY_API = 'https://timor.tech/api/holiday/year/'
 const HOLIDAY_TIMEOUT_MS = 5000
 const HOLIDAY_NEXT_YEAR_MONTH = 11 // 12 月起（getMonth()=11）进插件时顺带补次年数据
+const HOLIDAY_RECHECK_MS = 60 * 60 * 1000 // 后台常驻时每小时自检一次节假日数据（跨年补数据）
+
+// 调度自愈参数
+const INIT_RETRY_MS = 300 // 宿主 API 未注入时的快速重试间隔
+const INIT_FAST_TRIES = 40 // 快速重试次数（300ms × 40 ≈ 12s），之后交给看门狗慢速重试
+const WATCHDOG_INTERVAL_MS = 30 * 1000 // 看门狗巡检间隔
+const MISSED_FIRE_GRACE_MS = 5 * 60 * 1000 // 错过的触发在此时间内仍补发，超过则只重排不补发
+const MIN_REARM_DELAY_MS = 1000 // 触发后重排的最小延迟：数据异常（如状态写不进去）时不会 0 延迟自我循环
+const ERROR_BACKOFF_MS = 30 * 1000 // 触发处理抛错后的退避间隔
 
 // ==================== 工具函数 ====================
 function pad2(n) {
@@ -50,13 +59,19 @@ function addLog(message, detail) {
 }
 
 // ==================== 提醒数据 ====================
+// 读失败（宿主 IPC 异常）与「确实没有数据」必须区分：
+// 前者要等下一轮重试，后者是合法状态（无待触发项）
+let storageReadFailed = false
+
 function readReminders() {
   try {
     const data = window.ztools.dbStorage.getItem(STORAGE_KEY)
+    storageReadFailed = false
     if (!data) return []
     const raw = typeof data === 'string' ? JSON.parse(data) : data
     return Array.isArray(raw) ? raw : []
   } catch (e) {
+    storageReadFailed = true
     console.error('[easyremind] readReminders error:', e)
     return []
   }
@@ -70,8 +85,20 @@ function writeReminders(list) {
 // 数据源 timor.tech/api/holiday，holiday=true 放假 / false 补班（调休上班）
 // 缓存结构: { years: { "2026": { "01-01": {h:0|1, n:"元旦"} } }, updatedAt: ts }
 
-let holidayCache = readHolidayCache()
+let holidayCache = null
+let holidayCacheLoaded = false
 let holidayUpdating = false
+
+// 宿主 API 有可能在 preload 执行完之后才注入（见文件末尾 init 的重试逻辑），
+// 所以节假日缓存改成「宿主就绪后首次使用时」读取，
+// 避免模块加载那一刻读到空值并被永久缓存下来
+function getHolidayCache() {
+  if (holidayCacheLoaded) return holidayCache
+  if (!hostReady()) return null
+  holidayCache = readHolidayCache()
+  holidayCacheLoaded = true
+  return holidayCache
+}
 
 function readHolidayCache() {
   try {
@@ -172,6 +199,7 @@ async function ensureHolidayData(force) {
       next.updatedAt = Date.now()
       writeHolidayCache(next)
       holidayCache = next
+      holidayCacheLoaded = true
       if (changed) {
         addLog('[节假日] 数据已更新，覆盖: ' + Object.keys(next.years).map((y) => y + '年').join('、'))
         scheduleNext() // 数据变化后重算下次触发时间
@@ -185,7 +213,8 @@ async function ensureHolidayData(force) {
 
 // 某天是工作日还是节假日（无数据时退化为自然周）
 function getDayType(d) {
-  const ym = holidayCache && holidayCache.years && holidayCache.years[d.getFullYear()]
+  const cache = getHolidayCache()
+  const ym = cache && cache.years && cache.years[d.getFullYear()]
   const key = pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
   if (ym && Object.prototype.hasOwnProperty.call(ym, key)) {
     return ym[key].h === 1 ? 'holiday' : 'workday'
@@ -312,14 +341,30 @@ function calcNextIntervalAligned(r, atTime) {
   return null
 }
 
+const TYPE_LABELS = { daily: '每日提醒', interval: '间隔提醒', once: '定时提醒' }
+
 function formatTime(ts) {
   const d = new Date(ts)
   return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds())
 }
 
+// 下次触发时间的人类可读格式：今天/明天带日期词，更远的日子带月-日
+function formatNextTime(ts) {
+  const d = new Date(ts)
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diffDays = Math.round((dayStart.getTime() - todayStart.getTime()) / 86400000)
+  const datePart = diffDays === 0 ? '今天' : diffDays === 1 ? '明天' : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+  return datePart + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+}
+
 // ==================== 调度器 ====================
 let schedulerTimer = null
 let scheduledTime = null
+// 连续算出「下次触发时间仍在过去」的次数：第一次立即补触发（启动时已过期的一次性提醒），
+// 之后按退避间隔重试，避免异常数据把渲染进程拖进 0 延迟死循环
+let overdueStreak = 0
 
 function calcNextTick(reminders) {
   let next = null
@@ -332,24 +377,52 @@ function calcNextTick(reminders) {
   return next
 }
 
-function scheduleNext() {
+// 重排下一次触发。minDelay 用于「刚触发完」的场景，
+// 保证异常数据下也不会出现 0 延迟的自我循环
+function scheduleNext(minDelay) {
   if (schedulerTimer) {
     clearTimeout(schedulerTimer)
     schedulerTimer = null
   }
+  scheduledTime = null
 
-  const next = calcNextTick(readReminders())
+  let next = null
+  try {
+    next = calcNextTick(readReminders())
+  } catch (e) {
+    // 计算异常等同于「暂时没有待触发项」，交给看门狗下一轮重试
+    console.error('[easyremind] scheduleNext calc error:', e)
+  }
   if (next === null) {
-    scheduledTime = null
+    overdueStreak = 0
     return
   }
 
   scheduledTime = next
-  const delay = Math.max(0, next - Date.now())
-  addLog('[调度] 定时器: ' + delay + 'ms 后触发 (' + formatTime(next) + ')', { nextTime: formatTime(next), delay })
+  const rawDelay = next - Date.now()
+  let delay
+  if (rawDelay < 0) {
+    delay = Math.max(minDelay || 0, overdueStreak === 0 ? 0 : ERROR_BACKOFF_MS)
+    overdueStreak++
+  } else {
+    delay = Math.max(minDelay || 0, rawDelay)
+    overdueStreak = 0
+  }
   schedulerTimer = setTimeout(() => {
-    triggerDue()
-    scheduleNext()
+    // 先摘掉句柄：万一 triggerDue 抛错，看门狗才能识别出「定时器已不在」并补设
+    schedulerTimer = null
+    // triggerDue 里的存储写入、系统通知都可能抛错，
+    // 但重排必须执行，否则一次异常就会让整条调度链永久停摆
+    let errored = false
+    try {
+      triggerDue()
+    } catch (e) {
+      errored = true
+      console.error('[easyremind] triggerDue error:', e)
+      addLog('[异常] 触发处理失败，' + Math.round(ERROR_BACKOFF_MS / 1000) + 's 后重试：' + ((e && e.message) || String(e)))
+    } finally {
+      scheduleNext(errored ? ERROR_BACKOFF_MS : MIN_REARM_DELAY_MS)
+    }
   }, delay)
 }
 
@@ -362,10 +435,19 @@ function triggerDue() {
     if (!r.enabled) continue
     const t = getNextTriggerTime(r, target)
     if (t !== null && Math.abs(t - target) < 1000) {
-      doTrigger(r, target)
+      // 单条提醒出错不影响同一时刻的其他提醒
+      try {
+        doTrigger(r, target)
+      } catch (e) {
+        console.error('[easyremind] doTrigger error:', r.id, e)
+        addLog('[异常] 「' + (r.title || r.id) + '」触发失败：' + ((e && e.message) || String(e)), { id: r.id })
+      }
     }
   }
 }
+
+// 已经发过通知的 once 提醒：状态写库失败时防止每轮重排都重复通知
+const firedOnceIds = new Set()
 
 function doTrigger(reminder, scheduled) {
   const now = Date.now()
@@ -373,20 +455,40 @@ function doTrigger(reminder, scheduled) {
   const target = reminders.find(r => r.id === reminder.id)
   if (!target) return
 
-  target.lastTriggered = now
   if (target.type === 'once') {
+    if (firedOnceIds.has(target.id)) {
+      // 已通知过，不再重复发；但仍要重试把「已触发」状态落库，
+      // 否则这条过期数据会一直占住 calcNextTick 的最小值，饿死其他提醒
+      if (target.enabled || target.lastTriggered === 0) {
+        target.enabled = false
+        target.lastTriggered = now
+        try {
+          writeReminders(reminders)
+        } catch (e) {
+          console.error('[easyremind] writeReminders retry error:', e)
+        }
+      }
+      return
+    }
+    firedOnceIds.add(target.id)
     target.enabled = false
   }
-  writeReminders(reminders)
+  target.lastTriggered = now
+  try {
+    writeReminders(reminders)
+  } catch (e) {
+    // 状态没写进去也要把提醒发出去，漏提醒比重复提醒更糟；
+    // 下一轮重排会再试一次写入
+    console.error('[easyremind] writeReminders error:', e)
+    addLog('[异常] 「' + target.title + '」触发状态保存失败：' + ((e && e.message) || String(e)), { id: target.id })
+  }
 
-  addLog('[触发] ' + target.title + ' 计划=' + formatTime(scheduled) + ' 实际=' + formatTime(now) + ' 偏差=' + (now - scheduled) + 'ms', {
+  const drift = now - scheduled
+  addLog('[触发] ' + target.title + ' · ' + formatTime(scheduled) + (drift ? '（偏差 ' + (drift > 0 ? '+' : '') + drift + 'ms）' : '（准点）'), {
+    id: target.id,
     type: target.type,
     scheduledTime: formatTime(scheduled),
-    actualTime: formatTime(now),
-    drift: (now - scheduled) + 'ms',
-    interval: target.interval,
-    lastTriggered: target.lastTriggered > 0 ? formatTime(target.lastTriggered) : '从未',
-    triggerAt: target.triggerAt ? formatTime(target.triggerAt) : undefined
+    actualTime: formatTime(now)
   })
 
   // 发送系统通知：标题=任务名，内容=描述
@@ -405,6 +507,137 @@ function doTrigger(reminder, scheduled) {
       window.ztools.showNotification(target.title + ': ' + (target.content || '提醒时间到了'))
     }
   }
+}
+
+// ==================== 启动与自愈 ====================
+// ZTools 只在创建插件视图时才执行 preload.js：要么用户打开插件，
+// 要么勾选「插件设置 → 跟随主程序同时启动运行」后由主程序在启动时后台预加载。
+// 所以这里不能假设「模块加载即一切就绪」：宿主 API 可能尚未注入、
+// 存储可能瞬时读失败、提醒数据可能稍后才落库。一次性排程只要读空一次
+// 就会永久停摆，因此启动走显式 init + 快速重试，长期由看门狗兜底。
+let schedulerReady = false
+let watchdogTimer = null
+let lastHolidayCheckAt = 0
+const hostReadyAtLoad = hostReady()
+
+function hostReady() {
+  const z = window.ztools
+  return !!(z && z.dbStorage && typeof z.dbStorage.getItem === 'function')
+}
+
+function init() {
+  if (schedulerReady) return true
+  if (!hostReady()) return false
+
+  schedulerReady = true
+  scheduleNext()
+  startWatchdog()
+  logSchedulerStart()
+  // 节假日数据：异步拉取，成功后内部会重算调度，不阻塞启动
+  ensureHolidayData(false).catch(() => {})
+  return true
+}
+
+function logSchedulerStart() {
+  const list = readReminders()
+  const enabled = list.filter(r => r.enabled).length
+  const suffix = scheduledTime
+    ? ' · 下次触发 ' + formatNextTime(scheduledTime)
+    : storageReadFailed
+      ? ' · 存储读取失败，稍后自动重试'
+      : ' · 暂无待触发项'
+  addLog('[启动] 调度器已就绪 · 提醒 ' + list.length + ' 条（启用 ' + enabled + '）' + suffix, {
+    hostReadyAtLoad,
+    total: list.length,
+    enabled,
+    nextTriggerAt: scheduledTime || undefined
+  })
+}
+
+// 宿主 API 还没注入时快速重试；重试窗口用尽后交给看门狗长期兜底
+function requestInit(triesLeft) {
+  if (init()) return
+  if (triesLeft > 0) {
+    setTimeout(() => requestInit(triesLeft - 1), INIT_RETRY_MS)
+    return
+  }
+  startWatchdog()
+}
+
+function startWatchdog() {
+  if (watchdogTimer) return
+  watchdogTimer = setInterval(watchdogTick, WATCHDOG_INTERVAL_MS)
+}
+
+function watchdogTick() {
+  try {
+    if (!schedulerReady) {
+      init()
+      return
+    }
+    if (!hostReady()) return
+
+    const now = Date.now()
+
+    // 1. 定时器不在：上次排程读到空数据、触发链被打断、或视图被冻结后丢弃
+    if (!schedulerTimer) {
+      const list = readReminders()
+      // 读失败 ≠ 没有提醒：等下一轮巡检，别把瞬时故障当成「无待触发项」
+      if (!storageReadFailed && calcNextTick(list) !== null) {
+        scheduleNext()
+        if (scheduledTime !== null) {
+          addLog('[自愈] 调度器已停摆，重新排程 · 下次触发 ' + formatNextTime(scheduledTime), { nextTriggerAt: scheduledTime })
+        }
+      }
+      checkHolidayData(now)
+      return
+    }
+
+    // 2. 排程时间已过却还没触发：定时器丢失、睡眠/休眠唤醒、系统时间跳变。
+    //    渲染进程单线程，这里补发后再 scheduleNext（内部会 clearTimeout）
+    //    就不会和原定时器重复触发
+    if (scheduledTime !== null && scheduledTime <= now) {
+      const missedBy = now - scheduledTime
+      if (missedBy <= MISSED_FIRE_GRACE_MS) {
+        addLog('[自愈] 补发错过的触发（迟到 ' + Math.round(missedBy / 1000) + 's）· ' + formatTime(scheduledTime), {
+          scheduledTime: formatTime(scheduledTime),
+          missedByMs: missedBy
+        })
+        triggerDue()
+      } else {
+        addLog('[自愈] 触发已过期 ' + Math.round(missedBy / 60000) + ' 分钟，跳过补发并重新排程', {
+          scheduledTime: formatTime(scheduledTime),
+          missedByMs: missedBy
+        })
+      }
+      scheduleNext()
+      checkHolidayData(now)
+      return
+    }
+
+    // 3. 数据被外部改动（另一个插件窗口、上一次读取失败后恢复）→ 重新对齐
+    const list = readReminders()
+    if (storageReadFailed) {
+      checkHolidayData(now)
+      return
+    }
+    const next = calcNextTick(list)
+    const mismatch = next === null ? scheduledTime !== null : scheduledTime === null || Math.abs(next - scheduledTime) > 1000
+    if (mismatch) scheduleNext()
+
+    checkHolidayData(now)
+  } catch (e) {
+    // 巡检自身绝不能把调度带崩
+    console.error('[easyremind] watchdog error:', e)
+  }
+}
+
+// 后台常驻时插件视图不会重建，节假日数据靠这里按小时自检补全（跨年、次年数据公布）
+function checkHolidayData(now) {
+  if (now - lastHolidayCheckAt < HOLIDAY_RECHECK_MS) return
+  lastHolidayCheckAt = now
+  if (!holidayNeedFetch(getHolidayCache()).need) return
+  ensureHolidayData(false).catch(() => {})
 }
 
 // ==================== 暴露服务 ====================
@@ -478,14 +711,11 @@ window.services = {
     const reminders = readReminders()
     reminders.push(reminder)
     writeReminders(reminders)
-    addLog('[新建] ' + reminder.title + ' 类型=' + reminder.type, {
+    const next = getNextTriggerTime(reminder, Date.now())
+    addLog('[新建] ' + reminder.title + ' · ' + TYPE_LABELS[reminder.type] + (next ? ' · 下次触发 ' + formatNextTime(next) : ' · 当前不会触发'), {
       id: reminder.id,
       type: reminder.type,
-      interval: reminder.interval,
-      triggerAt: reminder.triggerAt ? new Date(reminder.triggerAt).toLocaleString() : undefined,
-      weekdays: reminder.weekdays,
-      triggerTime: reminder.triggerTime,
-      schedules: reminder.schedules
+      nextTriggerAt: next || undefined
     })
     scheduleNext()
     return reminder
@@ -510,7 +740,12 @@ window.services = {
       dayFilter: formData.dayFilter || 'all'
     }
     writeReminders(reminders)
-    addLog('[更新] ' + reminders[index].title, { id, type: formData.type, dayFilter: reminders[index].dayFilter })
+    const next = getNextTriggerTime(reminders[index], Date.now())
+    addLog('[修改] ' + reminders[index].title + ' · ' + TYPE_LABELS[formData.type] + (next ? ' · 下次触发 ' + formatNextTime(next) : ' · 当前不会触发'), {
+      id,
+      type: formData.type,
+      nextTriggerAt: next || undefined
+    })
     scheduleNext()
     return true
   },
@@ -535,22 +770,28 @@ window.services = {
 
     reminder.enabled = !reminder.enabled
     writeReminders(reminders)
-    addLog('[' + (reminder.enabled ? '启用' : '禁用') + '] ' + reminder.title, { id })
+    if (reminder.enabled) {
+      const next = getNextTriggerTime(reminder, Date.now())
+      addLog('[启用] ' + reminder.title + (next ? ' · 下次触发 ' + formatNextTime(next) : ' · 当前不会触发'), { id, nextTriggerAt: next || undefined })
+    } else {
+      addLog('[停用] ' + reminder.title, { id })
+    }
     scheduleNext()
     return true
   },
 
   // ===== 调度器控制 =====
+  // 渲染层不参与调度，只在进入插件时请求一次重排（睡眠唤醒/长时间后台后立刻对齐）
   refreshScheduler() {
     scheduleNext()
   },
 
-  stopScheduler() {
-    if (schedulerTimer) {
-      clearTimeout(schedulerTimer)
-      schedulerTimer = null
+  // 调度状态（供 UI 展示，只读）
+  getSchedulerState() {
+    return {
+      ready: schedulerReady,
+      nextTriggerText: scheduledTime ? formatNextTime(scheduledTime) : ''
     }
-    scheduledTime = null
   },
 
   // ===== 法定节假日数据 =====
@@ -574,17 +815,12 @@ window.services = {
     return readLogs()
   },
 
-  addLog(message, detail) {
-    addLog(message, detail)
-  },
-
   clearLogs() {
     window.ztools.dbStorage.setItem(LOG_KEY, JSON.stringify([]))
   }
 }
 
 // ==================== 启动调度 ====================
-scheduleNext()
-
-// 节假日数据：异步拉取，成功后内部会重算调度，不阻塞启动
-ensureHolidayData(false).catch(() => {})
+// 插件视图一被创建（用户打开插件，或主程序自启时后台预加载）就把内部任务调度起来。
+// 宿主 API 未就绪时快速重试，重试窗口用尽后由看门狗长期兜底。
+requestInit(INIT_FAST_TRIES)
