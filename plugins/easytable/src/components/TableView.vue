@@ -9,11 +9,16 @@ import {
 } from '../types/table'
 import { displayValue, defaultValue, searchTextOf, backfillField, coerceRowsToFields, addFieldOptions, collectFieldOptions } from '../domain/fieldTypes'
 import {
+  cellTextOf,
+  estimateColumnWidth,
+  isValidColumnWidth,
+  pruneColumnWidths
+} from '../domain/columnWidth'
+import {
   filterableFields,
   opsForField,
   matchAll
 } from '../domain/filters'
-import { formatTimestamp } from '../utils/time'
 import { rowsToCsv, rowsToTsv } from '../domain/codec/tableCodec'
 import { toBackup, serializeBackup } from '../domain/codec/jsonBackup'
 import { copyText, openExternal } from '../utils/copy'
@@ -43,6 +48,7 @@ const {
   importBackupTables,
   collectAllRows,
   setRowHeightMode,
+  setColumnWidths,
   backfillRows,
   replaceRows
 } = store
@@ -187,14 +193,65 @@ function toggleSelect(id: string) {
 }
 
 function cellText(field: FieldDef, row: Row): string {
-  if (field.id === CREATED_AT_FIELD_ID) return formatTimestamp(row.createdAt)
-  if (field.id === UPDATED_AT_FIELD_ID) return formatTimestamp(row.updatedAt)
-  return displayValue(field, row.values[field.id], multiSeparator.value)
+  return cellTextOf(field, row, multiSeparator.value)
 }
 
 function multiTags(field: FieldDef, row: Row): string[] {
   const v = row.values[field.id]
   return Array.isArray(v) ? v : []
+}
+
+/** 估算默认列宽的采样行数：只看前 N 行，大表不必为了量宽度整表扫一遍 */
+const WIDTH_SAMPLE_ROWS = 300
+
+/** 按内容长度估算的默认列宽：没手动拖过的列用它当 min-width */
+const autoWidths = computed<Record<string, number>>(() => {
+  const sample = activeRows.value.slice(0, WIDTH_SAMPLE_ROWS)
+  const map: Record<string, number> = {}
+  for (const f of displayFields.value) {
+    map[f.id] = estimateColumnWidth(f, sample, multiSeparator.value)
+  }
+  return map
+})
+
+/** 手动拖动记下的列宽；没记过或值不合法时返回 undefined（回到自适应） */
+function manualWidth(id: string): number | undefined {
+  const w = activeTable.value?.columnWidths?.[id]
+  return isValidColumnWidth(w) ? Math.round(w) : undefined
+}
+
+/**
+ * 拖动列宽：记到当前表上，下次打开沿用。
+ * 没拖过的列保持 min-width，由 el-table 按内容比例分配剩余宽度。
+ */
+function onHeaderDragend(newWidth: number, _oldWidth: number, column: { property?: string }) {
+  const table = activeTable.value
+  const id = column?.property
+  if (!table || typeof id !== 'string' || !displayFields.value.some((f) => f.id === id)) return
+  const w = Math.round(newWidth)
+  if (!Number.isFinite(w) || w <= 0) return
+  setColumnWidths(table.id, { ...(table.columnWidths ?? {}), [id]: w })
+}
+
+/** 清掉记下的列宽，回到「按内容自适应」 */
+function resetColumnWidths() {
+  const table = activeTable.value
+  if (!table) return
+  if (!Object.keys(table.columnWidths ?? {}).length) {
+    ElMessage.info('列宽已是按内容自适应')
+    return
+  }
+  setColumnWidths(table.id, {})
+  ElMessage.success('列宽已恢复为按内容自适应')
+}
+
+/**
+ * 悬停提示内容：默认取单元格 innerText，标签会被粘成一串，
+ * 这里统一用展示文本（多值按分隔符连接），和「复制/导出」看到的一致。
+ */
+function colTooltip({ row, column }: { row: Row; column: { property?: string } }): string {
+  const f = displayFields.value.find((x) => x.id === column?.property)
+  return f ? cellText(f, row) : ''
 }
 
 function openUrl(url: string) {
@@ -386,7 +443,8 @@ async function importJsonBackup() {
 }
 
 function onSaveSchema(schema: TableSchema) {
-  updateTableSchema(schema)
+  // 字段被删掉后，它的列宽记录一并清掉
+  updateTableSchema(pruneColumnWidths(schema))
   // 清掉引用了已删除字段的条件（系统时间列不受影响）
   const validIds = new Set(schema.fields.map((f) => f.id))
   filters.value = filters.value.filter(
@@ -540,6 +598,7 @@ function onMoreCommand(cmd: string | number | object) {
   if (c === 'fields') showFieldMgr.value = true
   else if (c === 'rowheight-fixed') setRowHeightMode('fixed')
   else if (c === 'rowheight-auto') setRowHeightMode('auto')
+  else if (c === 'colwidth-reset') resetColumnWidths()
   else if (c === 'clear') onClearTable()
   else if (c === 'delete') onRemoveTable()
 }
@@ -827,6 +886,7 @@ defineExpose({ applyEnterAction })
                   {{ rowHeightMode === 'auto' ? '✓' : '' }} 自适应行高（随内容撑高）
                 </span>
               </el-dropdown-item>
+              <el-dropdown-item command="colwidth-reset">列宽重置为自动</el-dropdown-item>
               <el-dropdown-item command="clear" divided>清空当前表（仅记录）</el-dropdown-item>
               <el-dropdown-item command="delete" divided>删除当前表</el-dropdown-item>
             </el-dropdown-menu>
@@ -854,6 +914,7 @@ defineExpose({ applyEnterAction })
           @selection-change="(rows: Row[]) => { selectedIds = new Set(rows.map((r) => r.id)) }"
           @row-dblclick="(row: Row) => openEdit(row)"
           @sort-change="onSortChange"
+          @header-dragend="onHeaderDragend"
         >
           <el-table-column type="selection" width="40" align="center" :reserve-selection="true" />
           <el-table-column label="操作" width="110" align="center" fixed="left">
@@ -867,10 +928,13 @@ defineExpose({ applyEnterAction })
             :key="f.id"
             :prop="f.id"
             :label="f.name"
-            :min-width="110"
+            :width="manualWidth(f.id)"
+            :min-width="manualWidth(f.id) ? undefined : autoWidths[f.id]"
             align="center"
             header-align="center"
             sortable="custom"
+            show-overflow-tooltip
+            :tooltip-formatter="colTooltip"
             :sort-orders="['ascending', 'descending', null]"
           >
             <template #default="{ row }">
