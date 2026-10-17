@@ -13,8 +13,7 @@
       <div id="scoop-chip" class="chip">检测中…</div>
     </div>
     <div class="spacer"></div>
-    <button id="btn-check-update" class="btn ghost" title="检查可更新软件">检查更新</button>
-    <button id="btn-update-all" class="btn primary" title="scoop update *">全部更新</button>
+    <button id="btn-check-update" class="btn ghost" title="同步 Scoop 与所有 bucket，并打开可更新列表">检查更新</button>
   </header>
 
   <nav id="tabs">
@@ -67,7 +66,6 @@
       <div class="toolbar">
         <span class="meta" id="status-meta">点击「检查更新」获取最新状态</span>
         <div class="spacer"></div>
-        <button id="btn-refresh-status" class="btn ghost small">刷新</button>
         <button id="btn-update-outdated" class="btn primary small">更新全部可更新项</button>
       </div>
       <div class="table-wrap">
@@ -78,7 +76,7 @@
         <div class="empty" data-empty-for="tbl-outdated" hidden>暂无可更新项 🎉</div>
       </div>
       <div id="broken-box" hidden>
-        <div class="group-title">异常包（清单已移除 / 安装失败，建议卸载重装）</div>
+        <div class="group-title">异常包（清单已移除 / 安装失败 / 已弃用 / 缺少依赖）</div>
         <div class="table-wrap">
           <table class="tbl" id="tbl-broken">
             <thead><tr><th>名称</th><th>版本</th><th>状态</th><th class="th-ops">操作</th></tr></thead>

@@ -120,7 +120,7 @@ function scoopScript(scoopArgs, { json = false } = {}) {
  * PowerShell 5.1 对空数组管道 ConvertTo-Json 会输出空串，拿不到任何 JSON——
  * 打开这个开关后按 { data: [], warnings: 全部输出行 } 返回，而不是报错。
  */
-function runScoopJson(scoopArgs, { timeout = 150000, allowEmpty = false } = {}) {
+function runScoopJson(scoopArgs, { timeout = 150000, allowEmpty = false, strict = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn('powershell.exe', PS_BASE.concat(scoopScript(scoopArgs, { json: true })), {
       windowsHide: true,
@@ -146,11 +146,15 @@ function runScoopJson(scoopArgs, { timeout = 150000, allowEmpty = false } = {}) 
     child.on('error', (e) => finish(new Error('无法启动 powershell.exe：' + e.message)));
     child.on('close', (code) => {
       if (done) return;
+      // 状态检查不能把失败或只读到一部分的输出当成“全部最新”。
+      if (strict && (code !== 0 || err.trim())) {
+        return finish(new Error(trimLog(out + '\n' + err) || ('scoop 退出码 ' + code)));
+      }
       try {
         const r = extractJson(out || err);
         finish(null, r);
       } catch (e) {
-        if (allowEmpty) {
+        if (allowEmpty && !(strict && /^JSON 解析失败/.test(e.message))) {
           // ⚠ stderr 必须一起纳入："命令不存在"类错误走的是错误流（stderr），
           // 只看 stdout 的话 detect 永远看不到报错文本（1.4.2 修了个寂寞，用户实测）
           const raw = String(out || '') + (err ? '\n' + String(err) : '');
@@ -567,17 +571,32 @@ async function installed() {
   return { apps, warnings: r.warnings };
 }
 
-/** 可更新清单 + 异常包（Manifest removed / Install failed）。全部最新时输出为空，须 allowEmpty */
-async function status() {
-  const r = await runScoopJson(['status'], { timeout: 240000, allowEmpty: true });
-  const arr = Array.isArray(r.data) ? r.data : [];
-  const seen = {};
+/** 显式刷新先同步清单；操作后的重读只查本地，避免重复联网。 */
+async function status({ refresh = false } = {}, onLine) {
+  const warnings = [];
+  let syncFailed = false;
+  if (refresh) {
+    try {
+      const r = await updateScoop(onLine);
+      // 部分 bucket 的 git pull 失败时，Scoop 仍可能以 0 退出。
+      const failures = r.lines.filter((line) =>
+        /^(?:fatal:|error:|(?:ERROR|WARN)\s+.*\b(?:failed|aborted)\b)|^Update (?:failed|aborted)\.|\bis not a git repository\. Skipped\./i.test(line));
+      if (failures.length) throw new Error(failures.join('\n'));
+    } catch (e) {
+      syncFailed = true;
+      warnings.push('软件源同步未完成，以下仅为本地清单的检查结果，可能遗漏更新：' + (e.message || e));
+    }
+  }
+  // --local 仍覆盖用户与全局应用，只关闭 status 自己的远程 fetch；fetch 不会更新清单。
+  const r = await runScoopJson(['status', '--local'], { timeout: 240000, allowEmpty: true, strict: true });
+  // PowerShell 的 ConvertTo-Json：0 条为空、1 条为对象、多条为数组。
+  const arr = r.data == null ? [] : (Array.isArray(r.data) ? r.data : [r.data]);
+  const seen = new Set();
   const outdated = [];
   const broken = [];
   for (const x of arr) {
     const name = String(x.Name || '');
-    if (!name || seen[name]) continue;   // 实测偶发整表重复，按名去重
-    seen[name] = true;
+    if (!name) continue;
     const item = {
       name,
       installed: String(x['Installed Version'] || ''),
@@ -585,10 +604,16 @@ async function status() {
       missing: String(x['Missing Dependencies'] || ''),
       info: String(x.Info || '')
     };
-    if (item.info.indexOf('removed') >= 0 || item.info.indexOf('Install failed') >= 0) broken.push(item);
-    else outdated.push(item);
+    // 只去掉完全重复的行，同名但版本/状态不同的安装记录不能被吞掉。
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (/removed|Install failed/i.test(item.info) || !item.latest) {
+      if (item.missing) item.info = [item.info, '缺少依赖：' + item.missing].filter(Boolean).join(', ');
+      broken.push(item);
+    } else outdated.push(item);
   }
-  return { outdated, broken, warnings: r.warnings };
+  return { outdated, broken, warnings: warnings.concat(r.warnings), syncFailed };
 }
 
 async function searchApps(keyword) {

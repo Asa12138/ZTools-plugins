@@ -151,7 +151,7 @@
         '读取失败：' + (e && e.message ? e.message : e);
       showWarnings('#installed-warnings', [String(e && e.message || e)]);
       setStatus('读取失败');
-    } finally { setBusy(false); }
+    }
   }
   /** Info 列 → 彩色标签：锁定=黄，安装失败/清单移除=红，全局安装=灰，其余原样灰 */
   function infoTag(info) {
@@ -194,14 +194,32 @@
   $('#filter-installed').oninput = renderInstalled;
 
   // ---------- 可更新 ----------
-  async function loadStatus() {
+  let statusLoading = false;
+  async function loadStatus(refresh = false) {
+    if (statusLoading || (refresh && busy)) return;
+    statusLoading = true;
+    if (refresh) {
+      setBusy(true);
+      drawer.hidden = false;
+      drawerLog.innerHTML = '';
+      drawerTitle.textContent = '检查更新：同步软件源';
+      appendLog('$ scoop update');
+    }
     const tbody = $('#tbl-outdated tbody');
-    tbody.innerHTML = '<tr><td colspan="5" class="dim">检查中…（要联网对比各 bucket，可能要十几秒）</td></tr>';
-    setStatus('检查更新 …', true);
+    const empty = $('#pane-status .empty');
+    empty.hidden = true;
+    showWarnings('#status-warnings', []);
+    $('#broken-box').hidden = true;
+    $('#cnt-outdated').textContent = '';
+    $('#status-meta').textContent = refresh ? '正在同步 Scoop 与 bucket，随后检查全部应用…' : '正在读取本地更新状态…';
+    tbody.innerHTML = '<tr><td colspan="5" class="dim">' +
+      (refresh ? '同步软件源并检查更新中…（可能需要几十秒，进度见任务日志）' : '检查中…') + '</td></tr>';
+    setStatus(refresh ? '同步软件源并检查更新 …' : '检查更新 …', true);
     try {
-      const r = await S.status();
+      const r = await S.status({ refresh }, refresh ? (line) => appendLog(line) : undefined);
       $('#cnt-outdated').textContent = r.outdated.length;
-      $('#status-meta').textContent = '可更新 ' + r.outdated.length + ' 个 · 异常 ' + r.broken.length + ' 个';
+      $('#status-meta').textContent = (r.syncFailed ? '软件源同步未完成 · ' : '') +
+        '可更新 ' + r.outdated.length + ' 个 · 异常 ' + r.broken.length + ' 个';
       tbody.innerHTML = r.outdated.map((a) => {
         const held = /held/i.test(a.info);
         return '<tr>' +
@@ -213,7 +231,8 @@
             (held ? '' : '<button class="btn small ghost" data-act="update" data-name="' + esc(a.name) + '">更新</button>') +
           '</td></tr>';
       }).join('');
-      $('#pane-status .empty').hidden = r.outdated.length > 0;
+      empty.hidden = r.outdated.length > 0;
+      empty.textContent = r.syncFailed ? '本地清单暂无可更新项；软件源同步未完成，请查看提示后重试' : '暂无可更新项 🎉';
 
       const brokenBox = $('#broken-box');
       brokenBox.hidden = r.broken.length === 0;
@@ -223,13 +242,19 @@
         '<td class="td-ops"><button class="btn small danger" data-act="uninstall" data-name="' + esc(a.name) + '" title="两步确认；Alt+点击确认 = 彻底卸载（-p）">卸载</button></td></tr>'
       ).join('');
       showWarnings('#status-warnings', r.warnings);
-      setStatus('就绪');
+      setStatus(r.syncFailed ? '软件源同步未完成，结果可能不完整' : '检查完成');
+      if (refresh) appendLog(r.syncFailed ? '⚠ 软件源同步未完成，结果可能不完整' : '✅ 软件源同步与更新检查完成');
     } catch (e) {
       tbody.innerHTML = '';
-      $('#pane-status .empty').hidden = false;
-      $('#pane-status .empty').textContent = '检查失败：' + (e && e.message ? e.message : e);
+      empty.hidden = false;
+      empty.textContent = '检查失败：' + (e && e.message ? e.message : e);
+      $('#status-meta').textContent = '检查失败，请重试';
+      if (refresh) appendLog(empty.textContent, 'err');
       setStatus('检查失败');
-    } finally { setBusy(false); }
+    } finally {
+      statusLoading = false;
+      if (refresh) setBusy(false);
+    }
   }
 
   // ---------- 搜索安装 ----------
@@ -263,7 +288,7 @@
       tbody.innerHTML = '';
       $('#pane-search .empty').hidden = false;
       $('#pane-search .empty').textContent = '搜索失败：' + (e && e.message ? e.message : e);
-    } finally { setBusy(false); }
+    }
   }
   $('#btn-search').onclick = doSearch;
   $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
@@ -392,16 +417,14 @@
     } catch (e) { setStatus('打开目录失败：' + (e && e.message)); }
   }
 
-  // ---------- 顶部动作 ----------
+  // ---------- 检查更新与批量操作 ----------
   $('#btn-check-update').onclick = () => {
     document.querySelector('.tab[data-tab="status"]').click();
-    loadStatus();
+    return loadStatus(true);
   };
-  $('#btn-refresh-status').onclick = loadStatus;
   $('#btn-update-outdated').onclick = () => {
     runOp('update *', (onLine) => S.updateApp('*', onLine), () => { loadInstalled(); loadStatus(); });
   };
-  $('#btn-update-all').onclick = $('#btn-update-outdated').onclick;
   $('#btn-cache-clear').onclick = () => {
     runOp('cache rm *', (onLine) => S.clearCache(onLine), loadCache);
   };

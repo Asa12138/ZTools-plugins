@@ -240,7 +240,7 @@ if (process.argv.includes('--live')) {
     console.log('  search fzf: ' + sr.results.length + ' 条，首条=' +
       (sr.results[0] ? sr.results[0].name + '@' + sr.results[0].version : '无'));
 
-    // status 走网络，容易因代理抖动失败；失败不判死，打印即可
+    // status 默认只查本地清单；显式联网刷新由 status_tests.js 模拟验证。
     try {
       const st = await S.status();
       console.log('  status: 可更新 ' + st.outdated.length + '，异常 ' + st.broken.length +

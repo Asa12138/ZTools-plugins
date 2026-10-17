@@ -13,7 +13,7 @@
 | 页签 | 能做什么 |
 |------|---------|
 | **已安装** | 应用列表（名称 / 版本 / 来源 bucket / 更新时间 / 状态标签）、本地筛选；单个应用支持更新、打开主页、打开安装目录、锁定/解锁（锁定后 `scoop update` 跳过）、卸载 |
-| **可更新** | 一键检查所有可更新软件，逐个更新或全部更新；「异常包」（清单已移除 / 安装失败）单独分组提示处理 |
+| **可更新** | 顶部「检查更新」先同步 Scoop 与所有 bucket，再打开可更新列表；页内支持逐个更新或「更新全部可更新项」；异常包单独分组提示，软件源同步失败会标明结果可能不完整 |
 | **搜索安装** | 搜索本地已添加的 bucket，未安装的一键安装，实时滚动日志 |
 | **Bucket** | 查看已添加 bucket（来源 / 清单数 / 更新时间）、快捷添加常用 bucket、手动添加（支持名称 / git 地址 / 「名称 地址」）、移除 |
 | **缓存** | 按应用聚合统计下载缓存占用、清空缓存（`cache rm *`）、清理旧版本（`cleanup *`） |
@@ -86,6 +86,9 @@
     版本号必须锚定 `v` 前缀、从「数据 + 告警」合并文本里捞；
   - PowerShell 5.1 对空数组管道 `ConvertTo-Json` 输出**空串**（status 全最新 /
     search 无结果 / cache 已清空 / 新装无 git 四种场景都会踩），需 `allowEmpty`；
+  - `scoop status` 的远程 fetch 不会更新本地清单；显式刷新先执行 `scoop update`，
+    再用 `scoop status --local` 检查（仍覆盖用户和全局安装）。单条 JSON 对象也必须保留；
+    非零退出码、错误流或损坏 JSON 不能作为“无可更新项”处理；
   - `allowEmpty` 后还必须区分「跑了但空」与「命令不存在」（后者报错在 stderr），
     见 `classifyDetect`；
   - `scoop prefix` 输出裸路径，走纯文本通道。
@@ -109,6 +112,7 @@
 ├── scripts/make_logo.py   生成 logo.png
 └── tests/
     ├── run_tests.js   纯函数 + 实机冒烟（node tests/run_tests.js [--live]）
+    ├── status_tests.js   更新检查与刷新交互回归测试（模拟 Scoop，不联网）
     └── preview.html   浏览器假数据预览（?setup=1 模拟无 scoop 环境）
 ```
 
@@ -116,6 +120,7 @@
 
 ```
 node tests/run_tests.js          # 纯函数测试（vm 沙箱加载 preload，不需要 scoop）
+node tests/status_tests.js       # 更新状态回归（单条/多条/软件源同步/失败提示/刷新互斥）
 node tests/run_tests.js --live   # 追加真实 scoop 冒烟（检测/列表/状态/缓存/搜索/清单改写往返等）
 ```
 
