@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-- 发布准备版本：`1.0.0`；`package.json` 与 `plugin.json` 版本已同步，插件声明仅支持 Windows（`win32`）。
+- 发布准备版本：`1.0.0`；`package.json` 与 `plugin.json` 版本已同步，插件不限制平台，支持 Windows、macOS 及其他兼容 ZTools 的系统。
 - 构建：2026-09-25 运行 `pnpm build` 通过，包含 `vue-tsc --noEmit` 和 Vite production build。
 - 自动测试：2026-09-25 运行 `pnpm test`，11 个测试文件、71 项测试通过。
 - ZIP：已生成 `outputs/file-smart-rename-v1.0.0.zip`（1,810,862 字节）；包含 7 个文件且清单与 `dist` 完全一致，SHA-256 与入口检查见下方。

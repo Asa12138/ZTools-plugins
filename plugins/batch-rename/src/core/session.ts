@@ -79,7 +79,8 @@ export function createSession(): RenameSession {
 }
 
 export function pathKey(path: string, platform: string): string {
-  return platform === 'win32' ? path.replaceAll('/', '\\').toLowerCase() : path
+  const normalized = platform === 'win32' ? path.replaceAll('/', '\\') : path
+  return platform === 'win32' || platform === 'darwin' ? normalized.toLowerCase() : normalized
 }
 
 function isAbsolutePath(path: string, platform: string): boolean {

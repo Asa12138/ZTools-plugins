@@ -6,7 +6,11 @@ let lastTransaction = null
 let busy = false
 
 function pathKey(value) {
-  return process.platform === 'win32' ? value.replaceAll('/', '\\').toLowerCase() : value
+  const normalized = process.platform === 'win32' ? value.replaceAll('/', '\\') : value
+  // macOS volumes are commonly case-insensitive, like Windows volumes.
+  return process.platform === 'win32' || process.platform === 'darwin'
+    ? normalized.toLowerCase()
+    : normalized
 }
 
 function nameError(name) {

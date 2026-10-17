@@ -40,7 +40,7 @@ pnpm test
 
 ## 支持范围
 
-- 目标平台：Windows（`win32`）与 ZTools。
+- 支持 Windows、macOS、Linux 及其他兼容 ZTools 的系统。
 - 智能重命名依赖 ZTools 已配置的模型；每次最多处理 500 个文件。
 - 其他操作系统及未经实测的宿主版本暂不声明支持。
 

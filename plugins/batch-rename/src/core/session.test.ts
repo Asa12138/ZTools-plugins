@@ -17,6 +17,13 @@ const file = (path: string, error?: string): FileInfo => ({
 })
 
 describe('文件入口与会话', () => {
+  it('macOS 文件系统按大小写不敏感路径去重', () => {
+    expect(extractFilePaths({ code: 'batch-rename-files', payload: [
+      { path: '/Users/test/Photo.txt', isFile: true },
+      { path: '/Users/test/photo.txt', isFile: true }
+    ] }, 'darwin')).toEqual(['/Users/test/Photo.txt'])
+  })
+
   it('仅处理文件入口，并校验、去重绝对路径', () => {
     expect(extractFilePaths({ code: 'batch-rename', payload: '' }, 'win32')).toBeNull()
     expect(extractFilePaths({ code: 'batch-rename-files', payload: [
