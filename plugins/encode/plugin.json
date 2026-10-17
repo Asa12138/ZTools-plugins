@@ -1,5 +1,6 @@
 {
   "name": "encode-helper",
+  "title": "编码助手",
   "pluginName": "编码助手",
   "version": "2.0.2",
   "description": "页面式编码助手:自动识别 Base64/URL 编码/Unicode/时间戳并直接展示转换结果;UUID 生成。参考 uTools 编码小助手",
