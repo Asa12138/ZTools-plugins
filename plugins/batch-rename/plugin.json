@@ -7,7 +7,7 @@
   "version": "1.0.0",
   "main": "dist/index.html",
   "preload": "preload/services.js",
-  "logo": "logo.svg",
+  "logo": "logo.png",
   "development": {
     "main": "http://localhost:5173"
   },
@@ -15,13 +15,13 @@
     {
       "code": "batch-rename",
       "explain": "打开文件智能重命名",
-      "icon": "logo.svg",
+      "icon": "logo.png",
       "cmds": ["文件智能重命名", "批量重命名", "重命名"]
     },
     {
       "code": "batch-rename-files",
       "explain": "读取当前选中的文件",
-      "icon": "logo.svg",
+      "icon": "logo.png",
       "cmds": [
         {
           "type": "files",
