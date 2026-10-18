@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">文件智能重命名</title>
+  <desc id="desc">两份文件与交换箭头组成的批量重命名图标</desc>
+  <defs>
+    <linearGradient id="background" x1="48" y1="36" x2="454" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102A43"/>
+      <stop offset="0.52" stop-color="#176B87"/>
+      <stop offset="1" stop-color="#2A9D8F"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="112" y1="96" x2="392" y2="424" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D9F0EE"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#071D2B" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M0 386C104 350 171 411 264 393c86-17 133-82 248-54v173H0Z" fill="#071D2B" opacity=".16"/>
+
+  <g filter="url(#shadow)">
+    <path d="M119 84h171l72 72v268H119c-14 0-25-11-25-25V109c0-14 11-25 25-25Z" fill="#BDE3E1" opacity=".62"/>
+    <path d="M153 62h171l72 72v268H153c-14 0-25-11-25-25V87c0-14 11-25 25-25Z" fill="url(#paper)"/>
+    <path d="M324 62v62c0 6 5 10 11 10h61" fill="#A8D8D5"/>
+  </g>
+
+  <path d="M194 177h126M194 213h126M194 249h76" fill="none" stroke="#176B87" stroke-linecap="round" stroke-width="18"/>
+
+  <g fill="none" stroke="#EF8354" stroke-linecap="round" stroke-linejoin="round" stroke-width="22">
+    <path d="M173 313h132"/>
+    <path d="m277 281 32 32-32 32"/>
+    <path d="M309 365H177"/>
+    <path d="m205 333-32 32 32 32"/>
+  </g>
+
+  <circle cx="385" cy="385" r="58" fill="#EF8354"/>
+  <path d="m358 404 9-29 34-34 20 20-34 34-29 9Zm42-55 20 20" fill="none" stroke="#FFF8F0" stroke-linecap="round" stroke-linejoin="round" stroke-width="13"/>
+</svg>

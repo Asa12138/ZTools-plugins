@@ -26,7 +26,7 @@ function packagePlugin(): Plugin {
         `${JSON.stringify(pluginConfig, null, 2)}\n`,
         'utf8'
       )
-      copyFileSync(resolve(projectRoot, 'logo.png'), resolve(outputDirectory, 'logo.png'))
+      copyFileSync(resolve(projectRoot, 'logo.svg'), resolve(outputDirectory, 'logo.svg'))
       buildSync({
         entryPoints: [resolve(projectRoot, 'preload/services.js')],
         outfile: resolve(outputDirectory, 'preload/services.js'),

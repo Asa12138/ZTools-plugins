@@ -16,7 +16,6 @@ import FileList from './components/FileList.vue'
 import ActionBar from './components/ActionBar.vue'
 import SmartPanel from './components/SmartPanel.vue'
 import ModuleIcon from './components/ModuleIcon.vue'
-import logoUrl from '../logo.png'
 
 const session = ref<RenameSession>(createSession())
 const resultView = ref<Map<string, RenameOutcome> | null>(null)
@@ -375,16 +374,6 @@ onMounted(() => window.ztools.onPluginEnter(handleEnter))
 
 <template>
   <main class="app-shell">
-    <header class="window-header">
-      <div class="window-brand">
-        <img class="brand-icon" :src="logoUrl" alt="">
-        <strong>文件智能重命名</strong>
-      </div>
-      <label class="window-search">
-        <span aria-hidden="true">⌕</span>
-        <input v-model="search" type="search" aria-label="筛选文件列表" placeholder="搜索或过滤当前文件...">
-      </label>
-    </header>
     <nav class="module-tabs" aria-label="重命名功能">
       <button v-for="item in ([['replace', '查找替换'], ['number', '自动编号'], ['smart', '智能重命名'], ['insert', '插入内容'], ['manual', '手动编辑']] as const)"
         :key="item[0]" type="button" :class="{ active: session.activeModule === item[0] }"
@@ -407,6 +396,10 @@ onMounted(() => window.ztools.onPluginEnter(handleEnter))
       :manual="session.activeModule === 'manual'"
       @remove="remove" @edit="editManualName" @paste="pasteManual"
       @show-error="showToast($event, 'error')" />
+    <label class="list-search">
+      <span aria-hidden="true">⌕</span>
+      <input v-model="search" type="search" aria-label="筛选文件列表" placeholder="搜索或过滤当前文件...">
+    </label>
     <ActionBar :count="session.files.length" :ready="counts.ready" :error="counts.error" :unchanged="counts.unchanged"
       :sort-mode="session.sortMode" :can-undo="canUndo" :can-execute="counts.ready > 0"
       :busy="busy || loading || metadataLoading > 0" @select-files="selectFiles" @select-folder="selectFolder"

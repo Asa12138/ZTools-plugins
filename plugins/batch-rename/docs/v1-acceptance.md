@@ -59,8 +59,8 @@
 - ZIP 路径：`outputs/file-smart-rename-v1.0.0.zip`
 - ZIP 大小：1,810,862 字节
 - SHA-256：`B14179998BC458ECACD2148A0BBDC28DCF84CB8A377505FE22A95AF2A9E7B521`
-- ZIP 根目录清单与 `dist` 完全一致，共 7 个文件：`plugin.json`、`index.html`、`logo.png`、`preload/services.js`、`assets/index-tox1SWC9.js`、`assets/index-tt30pCFg.css`、`assets/logo-B6eAezgC.png`。
-- `plugin.json` 的 `main`、`preload`、`logo` 路径在 ZIP 内均存在。
+- ZIP 根目录清单与 `dist` 完全一致，包含 `plugin.json`、`index.html`、`logo.svg`、`preload/services.js` 和构建后的 `assets/` 文件。
+- `plugin.json` 的 `main`、`preload`、`logo` 路径在 ZIP 内均存在，logo 使用自定义 SVG 图标。
 - `preload/services.js` 已包含扫描、元数据与改名引擎代码；安装运行不依赖项目开发目录或额外 `preload/*.js` 文件。
 - 本地安装及启动结果：用户反馈 1.0.0 已验收通过；具体日期和宿主版本未提供。
 

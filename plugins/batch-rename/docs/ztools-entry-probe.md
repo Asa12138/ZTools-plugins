@@ -81,7 +81,7 @@ Phase 0 的 A～D 入口验证已完成。ZTools 3.2.0 的文件上下文入口�
 
 1. 执行 `pnpm install`。
 2. 执行 `pnpm build`。
-3. 执行 `./scripts/package-probe.ps1 -OutputPath <目标 ZIP 绝对路径>`。ZIP 根目录必须直接包含 `plugin.json`、`index.html`、`logo.png` 和 `preload/services.js`，不能多一层 `dist/`。
+3. 执行 `./scripts/package-probe.ps1 -OutputPath <目标 ZIP 绝对路径>`。ZIP 根目录必须直接包含 `plugin.json`、`index.html`、`logo.svg` 和 `preload/services.js`，不能多一层 `dist/`。
 4. 在 ZTools 插件管理页面选择“本地安装”，选中生成的 `.zip` 文件。
 
 当前可安装包：`D:\Ai_Project\quick-batch-rename\outputs\batch-rename-probe-0.0.1.zip`。
