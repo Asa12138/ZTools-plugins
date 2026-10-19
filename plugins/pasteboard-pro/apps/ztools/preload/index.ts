@@ -11,6 +11,7 @@ import {
   mirrorHostHistory,
   ZToolsCanonicalClipboardStore,
   type HostClipboardApi,
+  type MirrorHostHistoryResult,
   type ZToolsDocumentDatabase,
 } from "./clipboard-store";
 import {
@@ -334,7 +335,7 @@ const ocrClient =
         helperPath: path.join(__dirname, "pasteboard-vision"),
       })
     : createTesseractOcrClient({ platform: process.platform });
-let synchronization = Promise.resolve();
+let synchronization: Promise<unknown> = Promise.resolve();
 let vaultSynchronization: Promise<SyncSettings> | undefined;
 let vaultSyncRequested = false;
 let shelfActivation = Promise.resolve();
@@ -523,7 +524,7 @@ function reportSynchronizationError(error: unknown): void {
 function triggerFastHistoryMirror(attempts = 4, intervalMs = 250): void {
   void scheduleHistoryMirror()
     .then((result) => {
-      if (result && typeof (result as Record<string, unknown>).imported === "number" && ((result as Record<string, unknown>).imported as number) > 0) {
+      if (result.imported > 0) {
         return;
       }
       if (attempts > 1) {
@@ -585,9 +586,9 @@ async function runRetentionIfDue(): Promise<void> {
   }
 }
 
-function scheduleHistoryMirror(): Promise<void> {
+function scheduleHistoryMirror(): Promise<MirrorHostHistoryResult> {
   const nextSynchronization = synchronization
-    .then(async () => {
+    .then(async (): Promise<MirrorHostHistoryResult> => {
       const privacy = await privacyStore.get();
       const result = await mirrorHostHistory(ztools.clipboard, store, {
         deviceId: ztools.getNativeId(),
@@ -616,6 +617,7 @@ function scheduleHistoryMirror(): Promise<void> {
       await runRetentionIfDue();
       broadcastHistoryChanged();
       void scheduleVaultSync().catch(reportSynchronizationError);
+      return result;
     });
   synchronization = nextSynchronization.catch(reportSynchronizationError);
   return nextSynchronization;
