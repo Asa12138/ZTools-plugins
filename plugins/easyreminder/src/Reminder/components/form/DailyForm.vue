@@ -8,10 +8,6 @@ const props = defineProps<{
   initialTime?: string
 }>()
 
-const emit = defineEmits<{
-  update: [data: { weekdays: number[]; time: string }]
-}>()
-
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 const weekdays = ref<number[]>([])
 const dailyTime = ref('09:00')

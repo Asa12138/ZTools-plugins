@@ -48,14 +48,8 @@ export function useReminders() {
     return [...reminders.value].sort((a, b) => b.createdAt - a.createdAt)
   })
 
-  const enabledReminders = computed(() => {
-    return reminders.value.filter(r => r.enabled)
-  })
-
   return {
-    reminders,
     sortedReminders,
-    enabledReminders,
     loadReminders,
     addReminder,
     updateReminder,

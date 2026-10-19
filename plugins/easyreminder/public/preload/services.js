@@ -1,6 +1,4 @@
-﻿const fs = require('node:fs')
-const path = require('node:path')
-const https = require('node:https')
+﻿const https = require('node:https')
 
 const STORAGE_KEY = 'easyremind_reminders'
 const LOG_KEY = 'easyremind_logs'
@@ -16,6 +14,7 @@ const INIT_FAST_TRIES = 40 // 快速重试次数（300ms × 40 ≈ 12s），之�
 const WATCHDOG_INTERVAL_MS = 30 * 1000 // 看门狗巡检间隔
 const MISSED_FIRE_GRACE_MS = 5 * 60 * 1000 // 错过的触发在此时间内仍补发，超过则只重排不补发
 const MIN_REARM_DELAY_MS = 1000 // 触发后重排的最小延迟：数据异常（如状态写不进去）时不会 0 延迟自我循环
+const TRIGGER_MATCH_WINDOW_MS = 1000 // 触发命中窗口：实际时刻与计划时刻相差在此范围内即视为「到点」
 const ERROR_BACKOFF_MS = 30 * 1000 // 触发处理抛错后的退避间隔
 
 // ==================== 工具函数 ====================
@@ -25,6 +24,15 @@ function pad2(n) {
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+// 日志时间戳：年月日 + 时分秒.毫秒
+function formatTimestamp(d) {
+  return (
+    d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' +
+    pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + '.' +
+    String(d.getMilliseconds()).padStart(3, '0')
+  )
 }
 
 // ==================== 日志 ====================
@@ -50,8 +58,7 @@ function writeLogs(logs) {
 function addLog(message, detail) {
   try {
     const logs = readLogs()
-    const now = new Date()
-    const time = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds()) + '.' + String(now.getMilliseconds()).padStart(3, '0')
+    const time = formatTimestamp(new Date())
     logs.unshift({ id: logId++, time, message, detail: detail || {} })
     if (logs.length > 100) logs.length = 100
     writeLogs(logs)
@@ -429,12 +436,25 @@ function scheduleNext(minDelay) {
 function triggerDue() {
   if (scheduledTime === null) return
   const target = scheduledTime
+  const now = Date.now()
+
+  // 定时器提前唤醒（系统时钟被回拨、休眠唤醒后的时间补偿）不能当作「到点」：
+  // 直接跳过这一轮，调用方（定时器回调的 finally）会按剩余时间重新等待。
+  // 否则会在同一计划时刻先触发一次、重排后再触发一次，变成重复提醒
+  if (now < target - TRIGGER_MATCH_WINDOW_MS) {
+    addLog('[自愈] 定时器提前唤醒，重新等待 · ' + formatTime(target) + '（早 ' + Math.round((target - now) / 1000) + 's）', {
+      scheduledTime: formatTime(target),
+      earlyByMs: target - now
+    })
+    return
+  }
+
   const reminders = readReminders()
 
   for (const r of reminders) {
     if (!r.enabled) continue
     const t = getNextTriggerTime(r, target)
-    if (t !== null && Math.abs(t - target) < 1000) {
+    if (t !== null && Math.abs(t - target) < TRIGGER_MATCH_WINDOW_MS) {
       // 单条提醒出错不影响同一时刻的其他提醒
       try {
         doTrigger(r, target)
@@ -455,6 +475,16 @@ function doTrigger(reminder, scheduled) {
   const target = reminders.find(r => r.id === reminder.id)
   if (!target) return
 
+  // 同一计划时刻只触发一次：时钟回拨、定时器提前唤醒、多个插件视图各跑一份调度器，
+  // 都可能让同一时刻再次进到这里。命中 lastFiredSlot 就跳过通知
+  if (target.lastFiredSlot === scheduled) {
+    addLog('[去重] 「' + target.title + '」已触发过该时刻，跳过重复通知 · ' + formatTime(scheduled), {
+      id: target.id,
+      scheduledTime: formatTime(scheduled)
+    })
+    return
+  }
+
   if (target.type === 'once') {
     if (firedOnceIds.has(target.id)) {
       // 已通知过，不再重复发；但仍要重试把「已触发」状态落库，
@@ -474,6 +504,7 @@ function doTrigger(reminder, scheduled) {
     target.enabled = false
   }
   target.lastTriggered = now
+  target.lastFiredSlot = scheduled
   try {
     writeReminders(reminders)
   } catch (e) {
@@ -622,7 +653,7 @@ function watchdogTick() {
       return
     }
     const next = calcNextTick(list)
-    const mismatch = next === null ? scheduledTime !== null : scheduledTime === null || Math.abs(next - scheduledTime) > 1000
+    const mismatch = next === null ? scheduledTime !== null : scheduledTime === null || Math.abs(next - scheduledTime) > TRIGGER_MATCH_WINDOW_MS
     if (mismatch) scheduleNext()
 
     checkHolidayData(now)
@@ -642,50 +673,6 @@ function checkHolidayData(now) {
 
 // ==================== 暴露服务 ====================
 window.services = {
-  // 读文件
-  readFile(file) {
-    try {
-      return fs.readFileSync(file, { encoding: 'utf-8' })
-    } catch {
-      return ''
-    }
-  },
-  // 文本写入到下载目录
-  writeTextFile(text) {
-    const filePath = path.join(window.ztools.getPath('downloads'), Date.now().toString() + '.txt')
-    fs.writeFileSync(filePath, text, { encoding: 'utf-8' })
-    return filePath
-  },
-  // 图片写入到下载目录
-  writeImageFile(base64Url) {
-    const matches = /^data:image\/([a-z]{1,20});base64,/i.exec(base64Url)
-    if (!matches) return
-    const filePath = path.join(
-      window.ztools.getPath('downloads'),
-      Date.now().toString() + '.' + matches[1]
-    )
-    fs.writeFileSync(filePath, base64Url.substring(matches[0].length), { encoding: 'base64' })
-    return filePath
-  },
-  // 自定义标题的通知
-  notify(title, body) {
-    if (typeof Notification === 'undefined') return
-    if (Notification.permission === 'granted') {
-      new Notification(title, { body })
-    } else if (Notification.permission !== 'denied') {
-      Notification.requestPermission().then(perm => {
-        if (perm === 'granted') new Notification(title, { body })
-      })
-    }
-  },
-  sendNotification(title, body) {
-    if (window.ztools && window.ztools.showNotification) {
-      window.ztools.showNotification(title + ': ' + body)
-    } else {
-      this.notify(title, body)
-    }
-  },
-
   // ===== 提醒数据 CRUD =====
   getReminders() {
     return readReminders()
@@ -706,6 +693,7 @@ window.services = {
       dayFilter: formData.dayFilter || 'all',
       enabled: true,
       lastTriggered: 0,
+      lastFiredSlot: 0,
       createdAt: Date.now()
     }
     const reminders = readReminders()
@@ -737,7 +725,9 @@ window.services = {
       triggerAt: formData.triggerAt,
       weekdays: formData.weekdays,
       triggerTime: formData.triggerTime,
-      dayFilter: formData.dayFilter || 'all'
+      dayFilter: formData.dayFilter || 'all',
+      // 改了调度参数，旧的「已触发时刻」不能再挡住重新算出来的同一时刻
+      lastFiredSlot: 0
     }
     writeReminders(reminders)
     const next = getNextTriggerTime(reminders[index], Date.now())
