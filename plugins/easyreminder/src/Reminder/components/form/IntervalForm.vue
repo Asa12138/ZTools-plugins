@@ -10,10 +10,6 @@ const props = defineProps<{
   initialAlign?: AlignMode
 }>()
 
-const emit = defineEmits<{
-  update: [data: { schedules: DaySchedule[]; interval: number; align: AlignMode }]
-}>()
-
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 const weekdays = ref<number[]>([])
 const unifiedTime = ref(true)

@@ -9,13 +9,6 @@ import { useLog } from '../composables/useLog'
 import { useHoliday } from '../composables/useHoliday'
 import { useScheduler } from '../composables/useScheduler'
 
-const props = defineProps({
-  enterAction: {
-    type: Object,
-    required: true
-  }
-})
-
 const {
   sortedReminders,
   loadReminders,
