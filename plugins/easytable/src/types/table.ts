@@ -62,6 +62,8 @@ export type FilterOp =
   | 'notEmpty'
   | 'eq'
   | 'contains'
+  | 'isTrue'
+  | 'isFalse'
   | 'today'
   | 'thisWeek'
   | 'thisMonth'
