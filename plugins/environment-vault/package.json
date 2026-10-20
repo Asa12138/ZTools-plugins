@@ -6,5 +6,8 @@
     "@xmldom/xmldom": "0.8.15",
     "adm-zip": "0.6.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/test-*.cjs"
+  }
 }
