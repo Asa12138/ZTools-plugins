@@ -14,6 +14,8 @@ let loadingPhase = false;
 
 const PLAYER_KEY = 'player';
 
+export type PlayMode = 'order' | 'all' | 'one' | 'shuffle';
+
 interface PlayerState {
   current: MusicItem | null;
   queue: MusicItem[];
@@ -24,8 +26,7 @@ interface PlayerState {
   duration: number;
   volume: number;
   muted: boolean;
-  repeat: 'off' | 'all' | 'one';
-  shuffle: boolean;
+  mode: PlayMode;
   usedQuality: QualityKey | '';
   lyric: LyricData;
   lyricLoading: boolean;
@@ -44,8 +45,7 @@ export const usePlayerStore = defineStore('player', {
     duration: 0,
     volume: 0.8,
     muted: false,
-    repeat: 'all',
-    shuffle: false,
+    mode: 'all',
     usedQuality: '',
     lyric: { rawLrc: '', translation: '', lines: [] },
     lyricLoading: false,
@@ -62,6 +62,26 @@ export const usePlayerStore = defineStore('player', {
     canNext(state): boolean {
       return state.queue.length > 1;
     },
+    modeLabel(state): string {
+      return (
+        {
+          order: '顺序播放',
+          all: '列表循环',
+          one: '单曲循环',
+          shuffle: '随机播放',
+        } as Record<PlayMode, string>
+      )[state.mode];
+    },
+    modeIcon(state): string {
+      return (
+        {
+          order: 'list',
+          all: 'loop',
+          one: 'loop-one',
+          shuffle: 'shuffle',
+        } as Record<PlayMode, string>
+      )[state.mode];
+    },
   },
   actions: {
     hydrate() {
@@ -72,8 +92,18 @@ export const usePlayerStore = defineStore('player', {
         this.index = typeof saved.index === 'number' ? saved.index : -1;
         this.volume = typeof saved.volume === 'number' ? saved.volume : 0.8;
         this.muted = !!saved.muted;
-        this.repeat = saved.repeat || 'all';
-        this.shuffle = !!saved.shuffle;
+        // 兼容旧版 repeat + shuffle 两个字段
+        if (['order', 'all', 'one', 'shuffle'].includes(saved.mode)) {
+          this.mode = saved.mode;
+        } else if (saved.shuffle) {
+          this.mode = 'shuffle';
+        } else if (saved.repeat === 'one') {
+          this.mode = 'one';
+        } else if (saved.repeat === 'off') {
+          this.mode = 'order';
+        } else {
+          this.mode = 'all';
+        }
       }
     },
     persist() {
@@ -83,8 +113,10 @@ export const usePlayerStore = defineStore('player', {
         index: this.index,
         volume: this.volume,
         muted: this.muted,
-        repeat: this.repeat,
-        shuffle: this.shuffle,
+        mode: this.mode,
+        // 兼容旧版本读取
+        repeat: this.mode === 'one' ? 'one' : this.mode === 'order' ? 'off' : 'all',
+        shuffle: this.mode === 'shuffle',
       });
     },
     initAudio() {
@@ -201,13 +233,13 @@ export const usePlayerStore = defineStore('player', {
 
     next(auto = false) {
       if (!this.queue.length) return;
-      if (this.repeat === 'one' && auto) {
+      if (this.mode === 'one' && auto) {
         this.seek(0);
         audio?.play().catch(() => {});
         return;
       }
       let nextIndex: number;
-      if (this.shuffle) {
+      if (this.mode === 'shuffle') {
         if (this.queue.length === 1) nextIndex = 0;
         else {
           do {
@@ -217,7 +249,7 @@ export const usePlayerStore = defineStore('player', {
       } else {
         nextIndex = this.index + 1;
         if (nextIndex >= this.queue.length) {
-          if (this.repeat === 'all') nextIndex = 0;
+          if (this.mode === 'all') nextIndex = 0;
           else {
             this.playing = false;
             return;
@@ -232,8 +264,16 @@ export const usePlayerStore = defineStore('player', {
         this.seek(0);
         return;
       }
+      if (this.mode === 'shuffle') {
+        let prevIndex: number;
+        do {
+          prevIndex = Math.floor(Math.random() * this.queue.length);
+        } while (prevIndex === this.index);
+        this.playAt(prevIndex);
+        return;
+      }
       let prevIndex = this.index - 1;
-      if (prevIndex < 0) prevIndex = this.repeat === 'all' ? this.queue.length - 1 : 0;
+      if (prevIndex < 0) prevIndex = this.mode === 'all' ? this.queue.length - 1 : 0;
       this.playAt(prevIndex);
     },
 
@@ -360,12 +400,15 @@ export const usePlayerStore = defineStore('player', {
       if (audio) audio.volume = this.muted ? 0 : this.volume;
       this.persist();
     },
-    cycleRepeat() {
-      this.repeat = this.repeat === 'off' ? 'all' : this.repeat === 'all' ? 'one' : 'off';
+    cycleMode() {
+      const order: PlayMode[] = ['order', 'all', 'one', 'shuffle'];
+      const i = order.indexOf(this.mode);
+      this.mode = order[(i + 1) % order.length];
       this.persist();
     },
-    toggleShuffle() {
-      this.shuffle = !this.shuffle;
+    setMode(mode: PlayMode) {
+      if (mode !== 'order' && mode !== 'all' && mode !== 'one' && mode !== 'shuffle') return;
+      this.mode = mode;
       this.persist();
     },
 

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import type { SourceMeta } from '@/types';
+import type { SourceMeta, SubscriptionEntry, InstallProgress, InstallSummary } from '@/types';
 import { services } from '@/api/services';
 import { toast } from '@/api/ztools';
 
@@ -53,13 +53,25 @@ export const useSourceStore = defineStore('sources', {
         this.installing = false;
       }
     },
-    async installFromJsonUrl(url: string) {
+    async installFromJsonUrl(url: string, onProgress?: (p: InstallProgress) => void) {
       this.installing = true;
       try {
-        const result = await services().plugins.installFromJsonUrl(url.trim());
+        const result = (await services().plugins.installFromJsonUrl(url.trim(), onProgress)) as InstallSummary;
         await this.refresh();
-        const ok = result.filter((r: any) => !r.error).length;
-        toast(`订阅导入完成：成功 ${ok} 个`);
+        toast(`订阅导入完成：成功 ${result.ok} 个，失败 ${result.failed} 个`);
+        return result;
+      } finally {
+        this.installing = false;
+      }
+    },
+    async fetchSubscription(url: string): Promise<{ desc: string; plugins: SubscriptionEntry[] }> {
+      return services().plugins.fetchSubscription(url.trim());
+    },
+    async installSelected(entries: SubscriptionEntry[], onProgress?: (p: InstallProgress) => void) {
+      this.installing = true;
+      try {
+        const result = (await services().plugins.installFromSubscription(entries, onProgress)) as InstallSummary;
+        await this.refresh();
         return result;
       } finally {
         this.installing = false;
@@ -70,7 +82,10 @@ export const useSourceStore = defineStore('sources', {
       try {
         const res = await services().plugins.pickAndInstallLocalFile();
         await this.refresh();
-        if (res) toast('已安装音源');
+        if (res) {
+          if (res.results) toast(`导入完成：成功 ${res.ok} 个，失败 ${res.failed} 个`);
+          else toast('已安装音源');
+        }
         return res;
       } finally {
         this.installing = false;

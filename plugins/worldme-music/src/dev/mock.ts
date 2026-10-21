@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 仅开发预览用的 mock 服务
  * 当直接在浏览器（npm run dev）打开界面、且没有 preload 注入时启用，
  * 让 UI 可以在没有 ZTools 宿主的情况下完整预览（含播放、歌词、榜单、下载等）。
@@ -146,8 +146,7 @@ export function setupMock() {
         index: 0,
         volume: 0.8,
         muted: false,
-        repeat: 'all',
-        shuffle: false,
+        mode: 'all',
       };
       writeKV(d);
     }
@@ -172,7 +171,6 @@ export function setupMock() {
         return meta;
       },
       installFromCode: async () => fakeSources[0],
-      installFromJsonUrl: async () => [],
       installFromJsonCode: async () => [],
       installFromLocalFile: async () => fakeSources[0],
       pickAndInstallLocalFile: async () => fakeSources[0],
@@ -189,6 +187,37 @@ export function setupMock() {
       setOrder: async () => null,
       update: async () => fakeSources[0],
       setUserVariables: async () => fakeSources[0],
+      fetchSubscription: async () => ({
+        desc: '开发预览示例订阅',
+        plugins: [
+          { name: '示例音源 A', url: 'https://example.com/a.js', version: '1.2.0' },
+          { name: '示例音源 B', url: 'https://example.com/b.js', version: '0.9.1' },
+          { name: '示例音源 C', url: 'https://example.com/c.js', version: '2.0.0' },
+        ],
+      }),
+      installFromSubscription: async (entries: any[], onProgress?: any) => {
+        const total = entries.length;
+        const results: any[] = [];
+        let ok = 0;
+        let failed = 0;
+        for (let i = 0; i < total; i++) {
+          const e = entries[i];
+          if (onProgress) onProgress({ phase: 'install', done: i, total, current: e.name, status: 'running' });
+          await new Promise((r) => setTimeout(r, 220));
+          const item = { name: e.name, url: e.url, ok: true, platform: e.name, version: e.version };
+          results.push(item);
+          ok++;
+          if (onProgress) onProgress({ phase: 'install', done: i + 1, total, current: e.name, status: 'ok' });
+        }
+        return { ok, failed, total, results };
+      },
+      installFromJsonUrl: async (url: string, onProgress?: any) => {
+        const entries = [
+          { name: '示例音源 A', url, version: '1.2.0' },
+          { name: '示例音源 B', url, version: '0.9.1' },
+        ];
+        return (window as any).services.plugins.installFromSubscription(entries, onProgress);
+      },
     },
     music: {
       search: async (hash: string, query: string, page = 1, type = 'music') => {
@@ -260,6 +289,13 @@ export function setupMock() {
       },
       setLyricsState: () => true,
       getLyricsSync: async () => ({ port: 0, token: '' }),
+    },
+    network: {
+      get: () => ({ config: { mode: 'off', url: '', mirror: true }, active: null, platform: 'web' }),
+      set: (config: any) => ({ config: { mode: 'off', url: '', mirror: true, ...config }, active: null, platform: 'web' }),
+      detect: () => null,
+      test: async () => ({ ok: true, status: 200, ms: 1, viaProxy: false, proxy: '', target: '开发预览' }),
+      mirrorList: () => [],
     },
     storage: {
       get: (key: string) => {

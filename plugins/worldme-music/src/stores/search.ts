@@ -1,4 +1,4 @@
-﻿import { defineStore } from 'pinia';
+import { defineStore } from 'pinia';
 import type { SearchType } from '@/types';
 import { services } from '@/api/services';
 import { useSourceStore } from './sources';
