@@ -1,11 +1,52 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import Icon from '@/components/Icon.vue';
 import { useSettingsStore } from '@/stores/settings';
 import { services } from '@/api/services';
 import { QUALITY_LABELS } from '@/utils/format';
 
 const settings = useSettingsStore();
+
+const netInfo = ref<any>(null);
+const manualUrl = ref('');
+const netBusy = ref(false);
+const netTest = ref<any>(null);
+
+async function loadNetwork() {
+  try {
+    netInfo.value = services().network.get();
+    manualUrl.value = netInfo.value?.config?.url || '';
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+onMounted(loadNetwork);
+
+async function applyNetwork(partial: any) {
+  netBusy.value = true;
+  netTest.value = null;
+  try {
+    netInfo.value = services().network.set(partial);
+    manualUrl.value = netInfo.value?.config?.url || manualUrl.value;
+  } catch (e: any) {
+    netTest.value = { ok: false, error: e?.message || '保存失败' };
+  } finally {
+    netBusy.value = false;
+  }
+}
+
+async function testNetwork() {
+  netBusy.value = true;
+  netTest.value = null;
+  try {
+    netTest.value = await services().network.test();
+  } catch (e: any) {
+    netTest.value = { ok: false, error: e?.message || '测试失败' };
+  } finally {
+    netBusy.value = false;
+  }
+}
 
 const themes = [
   { value: 'auto', label: '跟随系统' },
@@ -83,6 +124,71 @@ const appVersion = computed(() => (window as any).services?.version || '0.1.0');
         >
           <span></span>
         </button>
+      </div>
+    </section>
+
+    <section class="card group">
+      <h3><Icon name="cloud" :size="17" />网络</h3>
+      <div class="row">
+        <span>代理模式</span>
+        <div class="seg">
+          <button
+            :class="{ on: netInfo?.config?.mode === 'auto' }"
+            @click="applyNetwork({ mode: 'auto' })"
+          >
+            自动
+          </button>
+          <button
+            :class="{ on: netInfo?.config?.mode === 'off' }"
+            @click="applyNetwork({ mode: 'off' })"
+          >
+            直连
+          </button>
+          <button
+            :class="{ on: netInfo?.config?.mode === 'manual' }"
+            @click="applyNetwork({ mode: 'manual', url: manualUrl })"
+          >
+            手动
+          </button>
+        </div>
+      </div>
+      <div v-if="netInfo?.config?.mode === 'manual'" class="row">
+        <span>代理地址</span>
+        <div class="net-inline">
+          <input
+            v-model="manualUrl"
+            class="net-input"
+            placeholder="http://127.0.0.1:7890"
+            spellcheck="false"
+            @keydown.enter="applyNetwork({ url: manualUrl })"
+          />
+          <button class="btn" :disabled="netBusy" @click="applyNetwork({ url: manualUrl })">保存</button>
+        </div>
+      </div>
+      <div class="row">
+        <span>镜像回退（GitHub Raw / jsDelivr）</span>
+        <button
+          class="switch"
+          :class="{ on: netInfo?.config?.mirror !== false }"
+          @click="applyNetwork({ mirror: netInfo?.config?.mirror === false })"
+        >
+          <span></span>
+        </button>
+      </div>
+      <div class="row">
+        <span>当前生效</span>
+        <span class="text-3 path ellipsis">{{ netInfo?.active ? netInfo.active.url : '直连' }}</span>
+      </div>
+      <div class="row">
+        <span>连接测试</span>
+        <div class="net-test">
+          <button class="btn" :disabled="netBusy" @click="testNetwork">
+            <Icon name="refresh" :size="14" :class="{ spin: netBusy }" />测试
+          </button>
+          <span v-if="netTest" :class="netTest.ok ? 'net-ok' : 'net-fail'">
+            {{ netTest.ok ? `成功 · ${netTest.ms}ms` : netTest.error }}
+          </span>
+        </div>
       </div>
     </section>
 
@@ -227,5 +333,58 @@ const appVersion = computed(() => (window as any).services?.version || '0.1.0');
 }
 .small {
   font-size: 11.5px;
+}
+.net-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 58%;
+  justify-content: flex-end;
+}
+.net-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+}
+.net-input:focus {
+  border-color: var(--accent-1);
+}
+.net-inline .btn {
+  height: 32px;
+  padding: 0 12px;
+}
+.net-test {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  max-width: 66%;
+}
+.net-test .btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.net-ok {
+  color: #34d399;
+  font-size: 12px;
+}
+.net-fail {
+  color: #f87171;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spin {
+  animation: spin 0.8s linear infinite;
 }
 </style>

@@ -8,7 +8,7 @@ const store = require('./store');
 const net = require('./net');
 const _require = require('./require-shim');
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '1.1.1';
 
 /** hash -> { meta, instance } */
 const plugins = new Map();
@@ -40,7 +40,28 @@ function compareVersion(a, b) {
 
 function getUserVariables(platform) {
   const meta = findMetaByPlatform(platform);
-  return (meta && meta.userVariables) || {};
+  return normalizeValues(meta);
+}
+
+/** 取出音源的用户变量值（兼容旧版把值直接存在 userVariables 的数据） */
+function normalizeValues(meta) {
+  if (!meta) return {};
+  if (meta.userVariableValues && typeof meta.userVariableValues === 'object' && !Array.isArray(meta.userVariableValues)) {
+    return Object.assign({}, meta.userVariableValues);
+  }
+  if (meta.userVariables && !Array.isArray(meta.userVariables) && typeof meta.userVariables === 'object') {
+    return Object.assign({}, meta.userVariables);
+  }
+  return {};
+}
+
+function describeCompileError(err) {
+  const msg = (err && err.message) || String(err);
+  const dup = msg.match(/Identifier '([^']+)' has already been declared/);
+  if (dup) {
+    return `音源文件存在语法错误：标识符 “${dup[1]}” 被重复声明（属于音源自身代码问题）`;
+  }
+  return `音源文件存在语法错误：${msg}`;
 }
 
 /** 将插件代码实例化为插件对象 */
@@ -62,14 +83,25 @@ function instantiate(code) {
     ensurePluginInitialized: Promise.resolve(),
   };
 
-  const factory = Function(
-    "'use strict';" +
-      'return function(require, __musicfree_require, module, exports, console, env, process) {\n' +
-      code +
-      '\n};'
-  );
+  // 额外包一层块级作用域：允许插件在顶层声明 const/let/class env（或 module/process/console），
+  // 从而遮蔽同名注入参数，避免 “Identifier 'env' has already been declared”。
+  let factory;
+  try {
+    factory = Function(
+      "'use strict';" +
+        'return function(require, __musicfree_require, module, exports, console, env, process) {\n{\n' +
+        code +
+        '\n}\n};'
+    );
+  } catch (e) {
+    throw new Error(describeCompileError(e));
+  }
 
-  factory()(_require, _require, module, module.exports, console, env, processShim);
+  try {
+    factory()(_require, _require, module, module.exports, console, env, processShim);
+  } catch (e) {
+    throw new Error('音源初始化失败：' + ((e && e.message) || e));
+  }
 
   let instance = module.exports && module.exports.default ? module.exports.default : module.exports;
   if (!instance || typeof instance !== 'object') {
@@ -82,27 +114,32 @@ function instantiate(code) {
 
 function buildMetaFromInstance(instance, extra) {
   const code = extra.code;
-  return Object.assign(
-    {
-      hash: sha256(code),
-      platform: instance.platform,
-      title: instance.platform,
-      author: instance.author || '',
-      version: instance.version || '0.0.0',
-      srcUrl: instance.srcUrl || '',
-      primaryKey: instance.primaryKey || ['id'],
-      cacheControl: instance.cacheControl || 'no-cache',
-      supportedSearchType: instance.supportedSearchType || ['music', 'album', 'artist', 'sheet', 'lyric'],
-      hints: instance.hints || {},
-      userVariables: (Array.isArray(instance.userVariables) ? instance.userVariables : []).filter((it) => it && it.key),
-      enabled: true,
-      order: 0,
-      stateCode: '',
-      installedAt: Date.now(),
-      updatedAt: Date.now(),
-    },
-    extra.metaPatch || {}
-  );
+  const meta = {
+    hash: sha256(code),
+    platform: instance.platform,
+    title: instance.platform,
+    author: instance.author || '',
+    version: instance.version || '0.0.0',
+    srcUrl: instance.srcUrl || '',
+    primaryKey: instance.primaryKey || ['id'],
+    cacheControl: instance.cacheControl || 'no-cache',
+    supportedSearchType: instance.supportedSearchType || ['music', 'album', 'artist', 'sheet', 'lyric'],
+    hints: instance.hints || {},
+    // 用户变量声明（schema）
+    userVariables: (Array.isArray(instance.userVariables) ? instance.userVariables : []).filter((it) => it && it.key),
+    // 用户变量值（值对象，按 key 存储）
+    userVariableValues: {},
+    enabled: true,
+    order: 0,
+    stateCode: '',
+    installedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  const patch = extra.metaPatch || {};
+  Object.keys(patch).forEach((key) => {
+    if (patch[key] !== undefined) meta[key] = patch[key];
+  });
+  return meta;
 }
 
 function findMeta(hash) {
@@ -136,14 +173,22 @@ function loadFromDisk() {
     try {
       const instance = instantiate(code);
       if (!instance.platform) throw new Error('missing platform');
-      const merged = Object.assign({}, buildMetaFromInstance(instance, { code }), meta, {
-        stateCode: '',
-        version: meta.version || instance.version || '0.0.0',
-      });
+      const fresh = buildMetaFromInstance(instance, { code });
+      const merged = Object.assign({}, fresh, meta);
+      // schema 始终以当前音源代码为准；值单独保存，并兼容旧版把值写进 userVariables 的数据
+      merged.userVariables = fresh.userVariables;
+      merged.userVariableValues = normalizeValues(meta);
+      merged.stateCode = '';
+      merged.version = meta.version || instance.version || '0.0.0';
       plugins.set(merged.hash, { meta: merged, instance });
       kept.push(merged);
     } catch (e) {
-      const broken = Object.assign({}, meta, { stateCode: 'CANNOT_PARSE' });
+      const broken = Object.assign({}, meta, {
+        stateCode: 'CANNOT_PARSE',
+        errorMessage: (e && e.message) || '加载失败',
+        userVariableValues: normalizeValues(meta),
+      });
+      if (!Array.isArray(broken.userVariables)) broken.userVariables = [];
       plugins.set(broken.hash, { meta: broken, instance: null });
       kept.push(broken);
     }
@@ -195,8 +240,9 @@ async function installFromCode(code, options) {
     metaPatch: {
       srcUrl: options.srcUrl || instance.srcUrl || (byPlatform && byPlatform.srcUrl) || '',
       enabled: byPlatform ? byPlatform.enabled !== false : true,
-      userVariables: byPlatform && byPlatform.userVariables ? byPlatform.userVariables : undefined,
       order: byPlatform ? byPlatform.order || 0 : plugins.size,
+      // 保留同名音源已填写的用户变量值；声明由新代码决定
+      userVariableValues: normalizeValues(byPlatform),
     },
   });
 
@@ -211,26 +257,98 @@ async function installFromCode(code, options) {
 }
 
 async function installFromUrl(url, options) {
-  const target = net.addRandomHash(String(url).trim());
-  const res = await net.axios.get(target, { responseType: 'text', transformResponse: [(d) => d] });
-  const code = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-  if (!code || code.trim().length < 10) throw new Error('下载插件失败');
-  return installFromCode(code, Object.assign({}, options, { srcUrl: String(url).trim() }));
+  const original = String(url).trim();
+  if (!original) throw new Error('音源地址为空');
+  const code = await net.fetchText(net.addRandomHash(original), { timeout: 30000, retries: 2 });
+  if (!code || code.trim().length < 10) throw new Error('下载音源失败：内容为空');
+  return installFromCode(code, Object.assign({}, options, { srcUrl: original }));
 }
 
-async function installFromJsonUrl(url) {
-  const json = await net.axios.get(net.addRandomHash(String(url).trim())).then((r) => r.data);
-  const listArr = (json && json.plugins) || [];
-  const result = [];
-  for (const cfg of listArr) {
-    if (!cfg || !cfg.url) continue;
+/** 拉取订阅列表（不安装），供 UI 勾选 */
+async function fetchSubscription(url) {
+  const original = String(url).trim();
+  if (!original) throw new Error('订阅地址为空');
+  const json = await net.fetchJSON(net.addRandomHash(original), { timeout: 30000, retries: 2 });
+  const list = Array.isArray(json && json.plugins) ? json.plugins : [];
+  return {
+    desc: (json && json.desc) || '',
+    plugins: list
+      .filter((p) => p && p.url)
+      .map((p) => ({ name: p.name || '', url: p.url, version: p.version || '' })),
+  };
+}
+
+/**
+ * 安装订阅中选中的音源
+ * @param {Array<{name:string,url:string,version?:string}>} entries
+ * @param {{onProgress?:Function, concurrency?:number}} options
+ */
+async function installFromSubscription(entries, options) {
+  options = options || {};
+  const list = (Array.isArray(entries) ? entries : []).filter((e) => e && e.url);
+  const total = list.length;
+  const results = [];
+  let done = 0;
+  let ok = 0;
+  let failed = 0;
+  const concurrency = Math.max(1, Math.min(5, options.concurrency || 3));
+
+  const emit = (payload) => {
     try {
-      result.push(await installFromUrl(cfg.url));
+      if (typeof options.onProgress === 'function') options.onProgress(payload);
     } catch (e) {
-      result.push({ error: e.message, url: cfg.url, name: cfg.name || '' });
+      /* ignore */
+    }
+  };
+
+  emit({ phase: 'install', done: 0, total, current: '', status: 'start' });
+
+  let index = 0;
+  async function worker() {
+    while (true) {
+      const i = index++;
+      if (i >= list.length) return;
+      const entry = list[i];
+      emit({ phase: 'install', done, total, current: entry.name || entry.url, status: 'running' });
+      let item;
+      try {
+        const meta = await installFromUrl(entry.url);
+        item = {
+          name: entry.name || meta.platform,
+          url: entry.url,
+          ok: true,
+          platform: meta.platform,
+          version: meta.version,
+        };
+        ok++;
+      } catch (e) {
+        item = { name: entry.name || '', url: entry.url, ok: false, error: (e && e.message) || '安装失败' };
+        failed++;
+      }
+      results.push(item);
+      done++;
+      emit({
+        phase: 'install',
+        done,
+        total,
+        current: entry.name || entry.url,
+        status: item.ok ? 'ok' : 'fail',
+        error: item.error || '',
+        platform: item.platform || '',
+        version: item.version || '',
+      });
     }
   }
-  return result;
+
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(1, total)) }, () => worker());
+  await Promise.all(workers);
+  return { ok, failed, total, results };
+}
+
+/** 兼容旧接口：拉取订阅并安装全部 */
+async function installFromJsonUrl(url, onProgress) {
+  const sub = await fetchSubscription(url);
+  return installFromSubscription(sub.plugins, { onProgress });
 }
 
 function uninstall(hash) {
@@ -268,7 +386,7 @@ async function update(hash) {
 function setUserVariables(hash, vars) {
   const rec = plugins.get(hash);
   if (!rec) return null;
-  rec.meta.userVariables = Object.assign({}, rec.meta.userVariables || {}, vars || {});
+  rec.meta.userVariableValues = Object.assign({}, normalizeValues(rec.meta), vars || {});
   persist();
   return publicMeta(rec.meta);
 }
@@ -473,6 +591,8 @@ module.exports = {
   installFromCode,
   installFromUrl,
   installFromJsonUrl,
+  fetchSubscription,
+  installFromSubscription,
   uninstall,
   setEnabled,
   setOrder,
@@ -494,3 +614,4 @@ module.exports = {
   getMusicComments,
   compareVersion,
 };
+

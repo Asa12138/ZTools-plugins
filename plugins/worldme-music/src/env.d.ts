@@ -10,9 +10,16 @@ declare module '*.vue' {
 /** preload 通过 src-ztools/preload/services.js 注入的能力 */
 interface WmServices {
   version: string
-  ready(): Promise<{ version: string; mediaPort: number }>
+  ready(): Promise<{ version: string; mediaPort: number; network?: any }>
   plugins: Record<string, (...args: any[]) => Promise<any>>
   music: Record<string, (...args: any[]) => Promise<any>>
+  network: {
+    get(): any
+    set(config: any): any
+    detect(): any
+    test(url?: string): Promise<any>
+    mirrorList(url: string): string[]
+  }
   media: {
     getStreamUrl(url: string, headers?: Record<string, string>): Promise<string | null>
     getPort(): Promise<number>

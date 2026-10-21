@@ -1,7 +1,7 @@
 /**
  * Worldme Music · preload 入口
  * 遵循 CommonJS 规范，向渲染层暴露 window.services。
- * 负责：音源插件加载与调用、媒体代理、本地存储。
+ * 负责：音源插件加载与调用、媒体代理、本地存储、网络代理。
  */
 const fs = require('fs');
 const path = require('path');
@@ -9,8 +9,9 @@ const store = require('./src/store');
 const runtime = require('./src/runtime');
 const mediaServer = require('./src/media-server');
 const downloader = require('./src/download');
+const net = require('./src/net');
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 
 function ztools() {
   try {
@@ -30,23 +31,10 @@ async function installFromLocalFile(filePath) {
   }
   if (ext === '.json') {
     const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return installFromSubscription(json);
+    const entries = (json && json.plugins) || [];
+    return runtime.installFromSubscription(entries);
   }
   throw new Error('仅支持 .js 或 .json 文件');
-}
-
-async function installFromSubscription(json) {
-  const arr = (json && json.plugins) || [];
-  const result = [];
-  for (const cfg of arr) {
-    if (!cfg || !cfg.url) continue;
-    try {
-      result.push(await runtime.installFromUrl(cfg.url));
-    } catch (e) {
-      result.push({ error: e.message, url: cfg.url, name: cfg.name || '' });
-    }
-  }
-  return result;
 }
 
 async function pickAndInstallLocalFile() {
@@ -66,8 +54,13 @@ async function pickAndInstallLocalFile() {
 window.services = {
   version: VERSION,
 
-  /** 初始化：加载磁盘上的音源 + 启动媒体代理 */
+  /** 初始化：加载磁盘上的音源 + 启动媒体代理 + 应用代理配置 */
   ready: async () => {
+    try {
+      net.applyDefaults();
+    } catch (e) {
+      /* ignore */
+    }
     runtime.loadFromDisk();
     let port = 0;
     try {
@@ -75,15 +68,21 @@ window.services = {
     } catch (e) {
       console.warn('媒体代理启动失败', e);
     }
-    return { version: VERSION, mediaPort: port };
+    return { version: VERSION, mediaPort: port, network: net.getProxyInfo() };
   },
 
   plugins: {
     list: () => runtime.list(),
     installFromUrl: (url) => runtime.installFromUrl(url),
     installFromCode: (code, options) => runtime.installFromCode(code, options),
-    installFromJsonUrl: (url) => runtime.installFromJsonUrl(url),
-    installFromJsonCode: async (text) => installFromSubscription(JSON.parse(text)),
+    fetchSubscription: (url) => runtime.fetchSubscription(url),
+    installFromSubscription: (entries, onProgress) =>
+      runtime.installFromSubscription(entries, { onProgress }),
+    installFromJsonUrl: (url, onProgress) => runtime.installFromJsonUrl(url, onProgress),
+    installFromJsonCode: async (text, onProgress) => {
+      const json = JSON.parse(text);
+      return runtime.installFromSubscription((json && json.plugins) || [], { onProgress });
+    },
     installFromLocalFile,
     pickAndInstallLocalFile,
     uninstall: (hash) => runtime.uninstall(hash),
@@ -116,6 +115,14 @@ window.services = {
     download: (url, headers, filename, onProgress) => downloader.download(url, headers, filename, onProgress),
     setLyricsState: (state) => mediaServer.setLyricsState(state),
     getLyricsSync: () => mediaServer.getSyncInfo(),
+  },
+
+  network: {
+    get: () => net.getProxyInfo(),
+    set: (config) => net.setProxyConfig(config),
+    detect: () => net.proxies.detectSystemProxy(true),
+    test: (url) => net.testConnection(url),
+    mirrorList: (url) => net.mirrorList(url),
   },
 
   storage: {

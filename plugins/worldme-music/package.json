@@ -1,6 +1,6 @@
 {
   "name": "worldme-music",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "插件化、可定制的音乐播放器。不内置任何音源，加载兼容 MusicFree 协议的音源即可搜索歌曲 / 专辑 / 歌手 / 歌单，浏览榜单，在线播放并显示逐行歌词与桌面歌词，支持导入、下载、收藏与播放队列。",
   "type": "module",
   "scripts": {

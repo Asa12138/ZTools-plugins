@@ -68,9 +68,6 @@ function toggleFav() {
 
       <div class="center">
         <div class="controls">
-          <button class="icon-btn" :class="{ active: player.shuffle }" title="随机播放" @click="player.toggleShuffle()">
-            <Icon name="shuffle" :size="18" />
-          </button>
           <button class="icon-btn" title="上一首" :disabled="!player.canPrev" @click="player.prev()">
             <Icon name="prev" :size="20" />
           </button>
@@ -82,11 +79,11 @@ function toggleFav() {
           </button>
           <button
             class="icon-btn"
-            :class="{ active: player.repeat !== 'off' }"
-            :title="player.repeat === 'one' ? '单曲循环' : player.repeat === 'all' ? '列表循环' : '顺序播放'"
-            @click="player.cycleRepeat()"
+            :class="{ active: player.mode !== 'order' }"
+            :title="player.modeLabel"
+            @click="player.cycleMode()"
           >
-            <Icon :name="player.repeat === 'one' ? 'loop-one' : 'loop'" :size="18" />
+            <Icon :name="player.modeIcon" :size="18" />
           </button>
         </div>
         <div class="time text-3">

@@ -21,7 +21,7 @@ const showImport = ref(false);
 
 function openVars(src: any) {
   editing.value = src;
-  varsForm.value = { ...(src.userVariables || {}) };
+  varsForm.value = { ...(src.userVariableValues || {}) };
 }
 
 async function saveVars() {

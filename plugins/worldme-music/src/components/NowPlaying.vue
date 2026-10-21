@@ -165,16 +165,18 @@ function toggleFav() {
       <div class="np-time text-3">{{ formatTime(player.duration) }}</div>
 
       <div class="np-controls">
-        <button class="icon-btn" :class="{ active: player.shuffle }" @click="player.toggleShuffle()">
-          <Icon name="shuffle" :size="18" />
-        </button>
         <button class="icon-btn" @click="player.prev()"><Icon name="prev" :size="22" /></button>
         <button class="play-btn" @click="player.toggle()">
           <Icon :name="player.playing ? 'pause' : 'play'" :size="24" />
         </button>
         <button class="icon-btn" @click="player.next()"><Icon name="next" :size="22" /></button>
-        <button class="icon-btn" :class="{ active: player.repeat !== 'off' }" @click="player.cycleRepeat()">
-          <Icon :name="player.repeat === 'one' ? 'loop-one' : 'loop'" :size="18" />
+        <button
+          class="icon-btn"
+          :class="{ active: player.mode !== 'order' }"
+          :title="player.modeLabel"
+          @click="player.cycleMode()"
+        >
+          <Icon :name="player.modeIcon" :size="18" />
         </button>
       </div>
 

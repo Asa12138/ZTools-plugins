@@ -11,6 +11,8 @@
     "crypto-js": "4.2.0",
     "dayjs": "1.11.4",
     "he": "1.2.0",
+    "http-proxy-agent": "5.0.0",
+    "https-proxy-agent": "5.0.1",
     "qs": "6.11.0",
     "webdav": "5.3.1"
   }
